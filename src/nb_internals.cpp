@@ -362,6 +362,7 @@ NB_NOINLINE void init(const char *name) {
     p->translators = { default_exception_translator, nullptr, nullptr };
 
 #if PY_VERSION_HEX < 0x030C0000 && !defined(PYPY_VERSION)
+#if 0
     /* The implementation of typing.py on CPython <3.12 tends to introduce
        spurious reference leaks that upset nanobind's leak checker. The
        following band-aid, installs an 'atexit' handler that clears LRU caches
@@ -393,6 +394,7 @@ NB_NOINLINE void init(const char *name) {
     } else {
         PyErr_Clear();
     }
+#endif
 #endif
 
 #if !defined(PYPY_VERSION)
