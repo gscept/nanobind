@@ -111,6 +111,7 @@ The nanobind logo was designed by `AndoTwin Studio
    installing
    building
    basics
+   bazel
 
 .. toctree::
    :caption: Intermediate
@@ -123,6 +124,8 @@ The nanobind logo was designed by `AndoTwin Studio
    exceptions
    ndarray_index
    packaging
+   typing
+   utilities
 
 .. toctree::
    :caption: Advanced
@@ -139,3 +142,4 @@ The nanobind logo was designed by `AndoTwin Studio
    api_core
    api_extra
    api_cmake
+   api_bazel

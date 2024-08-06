@@ -32,6 +32,12 @@ try:
 except:
     needs_jax = pytest.mark.skip(reason="JAX is required")
 
+try:
+    import cupy as cp
+    def needs_cupy(x):
+        return x
+except:
+    needs_cupy = pytest.mark.skip(reason="CuPy is required")
 
 
 @needs_numpy
@@ -51,6 +57,7 @@ def test01_metadata():
     assert 'incompatible function arguments' in str(excinfo.value)
 
     a = np.zeros(shape=(3, 4, 5), dtype=np.float64)
+    assert t.get_is_valid(a)
     assert t.get_shape(a) == [3, 4, 5]
     assert t.get_size(a) == 60
     assert t.get_nbytes(a) == 60*8
@@ -66,11 +73,17 @@ def test01_metadata():
            not t.check_bool(np.array([1], dtype=np.float32)) and \
                t.check_bool(np.array([1], dtype=np.bool_))
 
+    assert not t.get_is_valid(None)
+    assert t.get_size(None) == 0
+    assert t.get_nbytes(None) == 0
+    assert t.get_itemsize(None) == 0
+
 
 def test02_docstr():
     assert t.get_shape.__doc__ == "get_shape(array: ndarray[writable=False]) -> list"
     assert t.pass_uint32.__doc__ == "pass_uint32(array: ndarray[dtype=uint32]) -> None"
     assert t.pass_float32.__doc__ == "pass_float32(array: ndarray[dtype=float32]) -> None"
+    assert t.pass_complex64.__doc__ == "pass_complex64(array: ndarray[dtype=complex64]) -> None"
     assert t.pass_bool.__doc__ == "pass_bool(array: ndarray[dtype=bool]) -> None"
     assert t.pass_float32_shaped.__doc__ == "pass_float32_shaped(array: ndarray[dtype=float32, shape=(3, *, 4)]) -> None"
     assert t.pass_float32_shaped_ordered.__doc__ == "pass_float32_shaped_ordered(array: ndarray[dtype=float32, order='C', shape=(*, *, 4)]) -> None"
@@ -82,11 +95,22 @@ def test02_docstr():
 def test03_constrain_dtype():
     a_u32 = np.array([1], dtype=np.uint32)
     a_f32 = np.array([1], dtype=np.float32)
+    a_cf64 = np.array([1+1j], dtype=np.complex64)
     a_bool = np.array([1], dtype=np.bool_)
 
     t.pass_uint32(a_u32)
     t.pass_float32(a_f32)
+    t.pass_complex64(a_cf64)
+    t.pass_complex64_const(a_cf64)
     t.pass_bool(a_bool)
+
+    a_f32_const = a_f32.copy()
+    a_f32_const.flags.writeable = False
+    t.pass_float32_const(a_f32_const)
+
+    a_cf64_const = a_cf64.copy()
+    a_cf64_const.flags.writeable = False
+    t.pass_complex64_const(a_cf64_const)
 
     with pytest.raises(TypeError) as excinfo:
         t.pass_uint32(a_f32)
@@ -94,6 +118,10 @@ def test03_constrain_dtype():
 
     with pytest.raises(TypeError) as excinfo:
         t.pass_float32(a_u32)
+    assert 'incompatible function arguments' in str(excinfo.value)
+
+    with pytest.raises(TypeError) as excinfo:
+        t.pass_complex64(a_u32)
     assert 'incompatible function arguments' in str(excinfo.value)
 
     with pytest.raises(TypeError) as excinfo:
@@ -307,6 +335,13 @@ def test15_passthrough():
 
     a = np.array([1,2,3])
     b = t.passthrough(a)
+    assert a is b
+
+    a = None
+    with pytest.raises(TypeError) as excinfo:
+        b = t.passthrough(a)
+    assert 'incompatible function arguments' in str(excinfo.value)
+    b = t.passthrough_arg_none(a)
     assert a is b
 
 
@@ -542,7 +577,7 @@ def test28_reference_internal():
     assert msg in str(excinfo.value)
 
 @needs_numpy
-def test29_force_contig_pytorch():
+def test29_force_contig_numpy():
     a = np.array([[1, 2, 3], [4, 5, 6], [7, 8, 9]])
     b = t.make_contig(a)
     assert b is a
@@ -561,3 +596,229 @@ def test30_force_contig_pytorch():
     b = t.make_contig(a)
     assert b is not a
     assert torch.all(b == a)
+
+@needs_numpy
+def test31_view():
+    # 1
+    x1 = np.array([[1,2],[3,4]], dtype=np.float32)
+    x2 = np.array([[1,2],[3,4]], dtype=np.float64)
+    assert np.allclose(x1, x2)
+    t.fill_view_1(x1)
+    assert np.allclose(x1, x2*2)
+    t.fill_view_1(x2)
+    assert np.allclose(x1, x2*2)
+
+    # 2
+    x1 = np.zeros((3, 4), dtype=np.float32, order='C')
+    x2 = np.zeros((3, 4), dtype=np.float32, order='F')
+    t.fill_view_2(x1)
+    t.fill_view_2(x2)
+    x3 = np.zeros((3, 4), dtype=np.float32, order='C')
+    t.fill_view_3(x3)
+    x4 = np.zeros((3, 4), dtype=np.float32, order='F')
+    t.fill_view_4(x4)
+
+    assert np.all(x1 == x2) and np.all(x2 == x3) and np.all(x3 == x4)
+
+    # 3
+    x1 = np.array([[1+2j, 3+4j], [5+6j, 7+8j]], dtype=np.complex64)
+    x2 = x1 * 2
+    t.fill_view_1(x1.view(np.float32))
+    assert np.allclose(x1, x2)
+    x2 = x1 * (-1+2j)
+    t.fill_view_5(x1)
+    assert np.allclose(x1, x2)
+    x2 = -x2;
+    t.fill_view_6(x1)
+    assert np.allclose(x1, x2)
+
+@needs_numpy
+def test32_half():
+    if not hasattr(t, 'ret_numpy_half'):
+        pytest.skip('half precision test is missing')
+    x = t.ret_numpy_half()
+    assert x.dtype == np.float16
+    assert x.shape == (2, 4)
+    assert np.all(x == [[1, 2, 3, 4], [5, 6, 7, 8]])
+
+@needs_numpy
+def test33_cast():
+    a = t.cast(False)
+    b = t.cast(True)
+    assert a.ndim == 0 and b.ndim == 0
+    assert a.dtype == np.int32 and b.dtype == np.float32
+    assert a == 1 and b == 1
+
+@needs_numpy
+def test34_complex_decompose():
+    x1 = np.array([1 + 2j, 3 + 4j, 5 + 6j], dtype=np.complex64)
+
+    assert np.all(x1.real == np.array([1, 3, 5], dtype=np.float32))
+    assert np.all(x1.imag == np.array([2, 4, 6], dtype=np.float32))
+
+@needs_numpy
+@pytest.mark.parametrize("variant", [1, 2])
+def test_uint32_complex_do_not_convert(variant):
+    if variant == 1:
+        arg = 1
+    else:
+        arg = np.uint32(1)
+    data = np.array([1.0 + 2.0j, 3.0 + 4.0j])
+    t.set_item(data, arg)
+    data2 = np.array([123, 3.0 + 4.0j])
+    assert np.all(data == data2)
+
+@needs_numpy
+def test36_check_generic():
+    class DLPackWrapper:
+        def __init__(self, o):
+            self.o = o
+        def __dlpack__(self):
+            return self.o.__dlpack__()
+
+    arr = DLPackWrapper(np.zeros((1)))
+    assert t.check(arr)
+
+@needs_numpy
+def test37_noninteger_stride():
+    a = np.array([[1, 2, 3, 4, 0, 0], [5, 6, 7, 8, 0, 0]], dtype=np.float32)
+    s = a[:, 0:4]  # slice
+    t.pass_float32(s)
+    assert t.get_stride(s, 0) == 6;
+    assert t.get_stride(s, 1) == 1;
+    try:
+        v = s.view(np.complex64)
+    except:
+        pytest.skip('your version of numpy is too old')
+    t.pass_complex64(v)
+    assert t.get_stride(v, 0) == 3;
+    assert t.get_stride(v, 1) == 1;
+
+    a = np.array([[1, 2, 3, 4, 0], [5, 6, 7, 8, 0]], dtype=np.float32)
+    s = a[:, 0:4]  # slice
+    t.pass_float32(s)
+    assert t.get_stride(s, 0) == 5;
+    assert t.get_stride(s, 1) == 1;
+    v = s.view(np.complex64)
+    with pytest.raises(TypeError) as excinfo:
+        t.pass_complex64(v)
+    assert 'incompatible function arguments' in str(excinfo.value)
+    with pytest.raises(TypeError) as excinfo:
+        t.get_stride(v, 0);
+    assert 'incompatible function arguments' in str(excinfo.value)
+
+@needs_numpy
+def test38_const_qualifiers_numpy():
+    a = np.array([0, 0, 0, 3.14159, 0], dtype=np.float64)
+    assert t.check_rw_by_value(a);
+    assert a[1] == 1.414214;
+    assert t.check_rw_by_value_float64(a);
+    assert a[2] == 2.718282;
+    assert a[4] == 16.0;
+    assert t.check_ro_by_value_ro(a);
+    assert t.check_ro_by_value_const_float64(a);
+    a.setflags(write=False)
+    assert t.check_ro_by_value_ro(a);
+    assert t.check_ro_by_value_const_float64(a);
+    assert a[0] == 0.0;
+    assert a[3] == 3.14159;
+
+    a = np.array([0, 0, 0, 3.14159, 0], dtype=np.float64)
+    assert t.check_rw_by_const_ref(a);
+    assert a[1] == 1.414214;
+    assert t.check_rw_by_const_ref_float64(a);
+    assert a[2] == 2.718282;
+    assert a[4] == 16.0;
+    assert t.check_ro_by_const_ref_ro(a);
+    assert t.check_ro_by_const_ref_const_float64(a);
+    a.setflags(write=False)
+    assert t.check_ro_by_const_ref_ro(a);
+    assert t.check_ro_by_const_ref_const_float64(a);
+    assert a[0] == 0.0;
+    assert a[3] == 3.14159;
+
+    a = np.array([0, 0, 0, 3.14159, 0], dtype=np.float64)
+    assert t.check_rw_by_rvalue_ref(a);
+    assert a[1] == 1.414214;
+    assert t.check_rw_by_rvalue_ref_float64(a);
+    assert a[2] == 2.718282;
+    assert a[4] == 16.0;
+    assert t.check_ro_by_rvalue_ref_ro(a);
+    assert t.check_ro_by_rvalue_ref_const_float64(a);
+    a.setflags(write=False)
+    assert t.check_ro_by_rvalue_ref_ro(a);
+    assert t.check_ro_by_rvalue_ref_const_float64(a);
+    assert a[0] == 0.0;
+    assert a[3] == 3.14159;
+
+@needs_torch
+def test39_const_qualifiers_pytorch():
+    a = torch.tensor([0, 0, 0, 3.14159, 0], dtype=torch.float64)
+    assert t.check_rw_by_value(a);
+    assert a[1] == 1.414214;
+    assert t.check_rw_by_value_float64(a);
+    assert a[2] == 2.718282;
+    assert a[4] == 16.0;
+    assert t.check_ro_by_value_ro(a);
+    assert t.check_ro_by_value_const_float64(a);
+    assert a[0] == 0.0;
+    assert a[3] == 3.14159;
+
+    a = torch.tensor([0, 0, 0, 3.14159, 0], dtype=torch.float64)
+    assert t.check_rw_by_const_ref(a);
+    assert a[1] == 1.414214;
+    assert t.check_rw_by_const_ref_float64(a);
+    assert a[2] == 2.718282;
+    assert a[4] == 16.0;
+    assert t.check_ro_by_const_ref_ro(a);
+    assert t.check_ro_by_const_ref_const_float64(a);
+    assert a[0] == 0.0;
+    assert a[3] == 3.14159;
+
+    a = torch.tensor([0, 0, 0, 3.14159, 0], dtype=torch.float64)
+    assert t.check_rw_by_rvalue_ref(a);
+    assert a[1] == 1.414214;
+    assert t.check_rw_by_rvalue_ref_float64(a);
+    assert a[2] == 2.718282;
+    assert a[4] == 16.0;
+    assert t.check_ro_by_rvalue_ref_ro(a);
+    assert t.check_ro_by_rvalue_ref_const_float64(a);
+    assert a[0] == 0.0;
+    assert a[3] == 3.14159;
+
+@needs_cupy
+@pytest.mark.filterwarnings
+def test40_constrain_order_cupy():
+    try:
+        c = cp.zeros((3, 5))
+        c.__dlpack__()
+    except:
+        pytest.skip('cupy is missing')
+
+    f = cp.asarray(c, order="F")
+    assert t.check_order(c) == 'C'
+    assert t.check_order(f) == 'F'
+    assert t.check_order(c[:, 2:5]) == '?'
+    assert t.check_order(f[1:3, :]) == '?'
+    assert t.check_device(cp.zeros((3, 5))) == 'cuda'
+
+
+@needs_cupy
+def test41_implicit_conversion_cupy():
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore")
+        try:
+            c = cp.zeros((3, 5))
+        except:
+            pytest.skip('cupy is missing')
+
+    t.implicit(cp.zeros((2, 2), dtype=cp.int32))
+    t.implicit(cp.zeros((2, 2, 10), dtype=cp.float32)[:, :, 4])
+    t.implicit(cp.zeros((2, 2, 10), dtype=cp.int32)[:, :, 4])
+    t.implicit(cp.zeros((2, 2, 10), dtype=cp.bool_)[:, :, 4])
+
+    with pytest.raises(TypeError) as excinfo:
+        t.noimplicit(cp.zeros((2, 2), dtype=cp.int32))
+
+    with pytest.raises(TypeError) as excinfo:
+        t.noimplicit(cp.zeros((2, 2), dtype=cp.uint8))

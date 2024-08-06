@@ -76,7 +76,7 @@ The remainder of this section goes through each of these options.
 Return value policies
 ---------------------
 
-nanobind provides a several *return value policy* annotations that can be
+nanobind provides several *return value policy* annotations that can be
 passed to :func:`module_::def`, :func:`class_::def`, and :func:`cpp_function`.
 The default policy is :cpp:enumerator:`rv_policy::automatic`, which is usually
 a reasonable default (but not in this case!).
@@ -167,8 +167,8 @@ options below. In particular, the following policies are available:
 
   This return value policy is *dangerous* and should be used cautiously.
   Undefined behavior will ensue when the C++ side deletes the instance while it
-  is still being used by Python. If need to use this policy, combine it with a
-  :cpp:struct:`keep_alive` function binding annotation to manage the lifetime.
+  is still being used by Python. If you need to use this policy, combine it with
+  a :cpp:struct:`keep_alive` function binding annotation to manage the lifetime.
   Or use the simple and safe :cpp:enumerator:`reference_internal
   <rv_policy::reference_internal>` alternative described next.
 
@@ -182,7 +182,7 @@ options below. In particular, the following policies are available:
      m.def("get_data", []{ return &data; }, nb::rv_policy::reference)
 
 - :cpp:enumerator:`rv_policy::reference_internal`: A policy for *methods* that
-  expose an internal field. The lifetime of the field must matches that of the
+  expose an internal field. The lifetime of the field must match that of the
   parent object.
 
   The policy resembles :cpp:enumerator:`reference <rv_policy::reference>` in
@@ -190,7 +190,7 @@ options below. In particular, the following policies are available:
   field without making a copy, and without transferring ownership to Python.
 
   Furthermore, it ensures that the instance owning the field (implicit
-  ``this``/``self`` argument) cannot be not garbage collected while an object
+  ``this``/``self`` argument) cannot be garbage collected while an object
   representing the field is alive.
 
   The example below uses this policy to implement a *getter* that permits
@@ -364,9 +364,9 @@ Intrusive reference counting is the most flexible and efficient way of handling
 shared ownership. The main downside is that you must adapt the base class of
 your object hierarchy to the needs of nanobind.
 
-The core idea is to define base class (e.g. ``Object``) that is common to all bound
-types requiring shared ownership. That class contains a builtin
-atomic counter to keep track of the number of outstanding references. 
+The core idea is to define base class (e.g. ``Object``) common to all bound
+types requiring shared ownership. That class contains a builtin atomic counter
+(e.g., ``m_ref_count``) and a Python object pointer (e.g., ``m_py_object``).
 
 .. code-block:: cpp
 
@@ -374,9 +374,27 @@ atomic counter to keep track of the number of outstanding references.
    ...
    private:
        mutable std::atomic<size_t> m_ref_count { 0 };
+       PyObject *m_py_object = nullptr;
    };
 
-With a few extra modifications, nanobind can unify this reference count so that
-it accounts for references in both languages. Please see the :ref:`detailed
-section on intrusive reference counting <intrusive>` for a concrete example on
-how to set this up.
+The core idea is that such ``Object`` instances can either be managed by C++ or
+Python. In the former case, the ``m_ref_count`` field keeps track of the number
+of outstanding references. In the latter case, reference counting is handled by
+Python, and the ``m_ref_count`` field remains unused.
+
+This is actually little wasteful---nanobind therefore ships with a more
+efficient reference counter sample implementation that supports both use cases
+while requiring only ``sizeof(void*)`` bytes of storage:
+
+.. code-block:: cpp
+
+   #include <nanobind/intrusive/counter.h>
+
+   class Object {
+   ...
+   private:
+       intrusive_counter m_ref_count;
+   };
+
+Please read the dedicated :ref:`section on intrusive reference counting
+<intrusive>` for more details on how to set this up.

@@ -15,60 +15,54 @@
 NAMESPACE_BEGIN(NB_NAMESPACE)
 NAMESPACE_BEGIN(detail)
 
-template <typename T> struct remove_opt_mono<std::optional<T>> : remove_opt_mono<T> {};
+template <typename T> struct remove_opt_mono<std::optional<T>>
+    : remove_opt_mono<T> { };
 
 template <typename T>
 struct type_caster<std::optional<T>> {
-    using Value = std::optional<T>;
-    using Ti = detail::intrinsic_t<T>;
-    using Caster = make_caster<Ti>;
+    using Caster = make_caster<T>;
 
-    static constexpr auto Name = const_name("Optional[") + concat(Caster::Name) + const_name("]");
-    static constexpr bool IsClass = false;
+    NB_TYPE_CASTER(std::optional<T>, optional_name(Caster::Name))
 
-    template <typename T_>
-    using Cast = movable_cast_t<T_>;
-
-    Value value = std::nullopt;
+    type_caster() : value(std::nullopt) { }
 
     bool from_python(handle src, uint8_t flags, cleanup_list* cleanup) noexcept {
-        if (src.is_none())
+        if (src.is_none()) {
+            value = std::nullopt;
             return true;
-
-        Caster caster;
-        if (!caster.from_python(src, flags, cleanup))
-            return false;
-
-        if constexpr (is_pointer_v<T>) {
-            static_assert(Caster::IsClass,
-                            "Binding 'optional<T*>' requires that 'T' can also be bound by nanobind.");
-            value = caster.operator cast_t<T>();
-        } else if constexpr (Caster::IsClass) {
-            value = caster.operator cast_t<T&>();
-        } else {
-            value = std::move(caster).operator cast_t<T&&>();
         }
 
-        return true;
-    }
+        Caster caster;
+        if (!caster.from_python(src, flags_for_local_caster<T>(flags), cleanup) ||
+            !caster.template can_cast<T>())
+            return false;
 
-    template <typename T_>
-    static handle from_cpp(T_ *value, rv_policy policy, cleanup_list *cleanup) noexcept {
-        if (!value)
-            return none().release();
-        return from_cpp(*value, policy, cleanup);
+        value.emplace(caster.operator cast_t<T>());
+
+        return true;
     }
 
     template <typename T_>
     static handle from_cpp(T_ &&value, rv_policy policy, cleanup_list *cleanup) noexcept {
         if (!value)
             return none().release();
-        return Caster::from_cpp(forward_like<T_>(*value), policy, cleanup);
+
+        return Caster::from_cpp(forward_like_<T_>(*value), policy, cleanup);
+    }
+};
+
+template <> struct type_caster<std::nullopt_t> {
+    bool from_python(handle src, uint8_t, cleanup_list *) noexcept {
+        if (src.is_none())
+            return true;
+        return false;
     }
 
-    explicit operator Value *() { return &value; }
-    explicit operator Value &() { return value; }
-    explicit operator Value &&() && { return (Value &&) value; }
+    static handle from_cpp(std::nullopt_t, rv_policy, cleanup_list *) noexcept {
+        return none().release();
+    }
+
+    NB_TYPE_CASTER(std::nullopt_t, const_name("None"))
 };
 
 NAMESPACE_END(detail)

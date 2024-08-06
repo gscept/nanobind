@@ -154,6 +154,13 @@ PyObject *module_import(const char *name) {
     return res;
 }
 
+PyObject *module_import(PyObject *o) {
+    PyObject *res = PyImport_Import(o);
+    if (!res)
+        throw python_error();
+    return res;
+}
+
 PyObject *module_new_submodule(PyObject *base, const char *name,
                                const char *doc) noexcept {
     PyObject *name_py, *res;
@@ -164,6 +171,7 @@ PyObject *module_new_submodule(PyObject *base, const char *name,
         goto fail;
 
     name_py = PyUnicode_FromFormat("%U.%s", base_name, name);
+    Py_DECREF(base_name);
 #else
     const char *base_name = PyModule_GetName(base);
     if (!base_name)
@@ -179,25 +187,32 @@ PyObject *module_new_submodule(PyObject *base, const char *name,
 #else
     res = PyImport_AddModule(PyUnicode_AsUTF8(name_py));
 #endif
+    Py_DECREF(name_py);
+    if (!res)
+        goto fail;
 
     if (doc) {
         PyObject *doc_py = PyUnicode_FromString(doc);
-        if (!doc_py || PyObject_SetAttrString(res, "__doc__", doc_py))
+        if (!doc_py)
             goto fail;
+        int rv = PyObject_SetAttrString(res, "__doc__", doc_py);
         Py_DECREF(doc_py);
+        if (rv)
+            goto fail;
     }
 
-    Py_DECREF(name_py);
-    Py_DECREF(base_name);
+    Py_INCREF(res); // extra reference for PyModule_AddObject
 
-    Py_INCREF(res);
-    if (PyModule_AddObject(base, name, res))
+    if (PyModule_AddObject(base, name, res)) { // steals on success
+        Py_DECREF(res);
         goto fail;
+    }
 
+    Py_INCREF(res); // turned borrowed into new reference
     return res;
 
 fail:
-    check(false, "nanobind::detail::module_new_submodule(): failed.");
+    raise_python_error();
 }
 
 // ========================================================================
@@ -488,6 +503,36 @@ void setitem(PyObject *obj, PyObject *key, PyObject *value) {
         raise_python_error();
 }
 
+void delitem(PyObject *obj, Py_ssize_t key_) {
+    PyObject *key = PyLong_FromSsize_t(key_);
+    if (!key)
+        raise_python_error();
+
+    int rv = PyObject_DelItem(obj, key);
+    Py_DECREF(key);
+
+    if (rv)
+        raise_python_error();
+}
+
+void delitem(PyObject *obj, const char *key_) {
+    PyObject *key = PyUnicode_FromString(key_);
+    if (!key)
+        raise_python_error();
+
+    int rv = PyObject_DelItem(obj, key);
+    Py_DECREF(key);
+
+    if (rv)
+        raise_python_error();
+}
+
+void delitem(PyObject *obj, PyObject *key) {
+    int rv = PyObject_DelItem(obj, key);
+    if (rv)
+        raise_python_error();
+}
+
 // ========================================================================
 
 PyObject *str_from_obj(PyObject *o) {
@@ -523,18 +568,25 @@ PyObject *bytes_from_obj(PyObject *o) {
 PyObject *bytes_from_cstr(const char *str) {
     PyObject *result = PyBytes_FromString(str);
     if (!result)
-        raise("nanobind::detail::bytes_from_cstr(): conversion error!");
+        raise_python_error();
     return result;
 }
 
-PyObject *bytes_from_cstr_and_size(const char *str, size_t size) {
-    PyObject *result = PyBytes_FromStringAndSize(str, (Py_ssize_t) size);
+PyObject *bytes_from_cstr_and_size(const void *str, size_t size) {
+    PyObject *result = PyBytes_FromStringAndSize((const char *) str, (Py_ssize_t) size);
     if (!result)
-        raise("nanobind::detail::bytes_from_cstr_and_size(): conversion error!");
+        raise_python_error();
     return result;
 }
 
 // ========================================================================
+
+PyObject *bool_from_obj(PyObject *o) {
+    int rv = PyObject_IsTrue(o);
+    if (rv == -1)
+        raise_python_error();
+    return rv == 1 ? Py_True : Py_False;
+}
 
 PyObject *int_from_obj(PyObject *o) {
     PyObject *result = PyNumber_Long(o);
@@ -566,6 +618,13 @@ PyObject *list_from_obj(PyObject *o) {
     return result;
 }
 
+PyObject *set_from_obj(PyObject *o) {
+    PyObject *result = PySet_New(o);
+    if (!result)
+        raise_python_error();
+    return result;
+}
+
 // ========================================================================
 
 PyObject **seq_get(PyObject *seq, size_t *size_out, PyObject **temp_out) noexcept {
@@ -576,6 +635,12 @@ PyObject **seq_get(PyObject *seq, size_t *size_out, PyObject **temp_out) noexcep
     /* This function is used during overload resolution; if anything
        goes wrong, it fails gracefully without reporting errors. Other
        overloads will then be tried. */
+
+    if (PyUnicode_CheckExact(seq) || PyBytes_CheckExact(seq)) {
+        *size_out = 0;
+        *temp_out = nullptr;
+        return nullptr;
+    }
 
 #if !defined(Py_LIMITED_API) && !defined(PYPY_VERSION)
     if (PyTuple_CheckExact(seq)) {
@@ -1064,6 +1129,15 @@ NB_CORE PyObject *repr_map(PyObject *o) {
     }
     s += str("})");
     return s.release().ptr();
+}
+
+// ========================================================================
+
+bool issubclass(PyObject *a, PyObject *b) {
+    int rv = PyObject_IsSubclass(a, b);
+    if (rv == -1)
+        raise_python_error();
+    return bool(rv);
 }
 
 NAMESPACE_END(detail)

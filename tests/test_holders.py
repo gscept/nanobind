@@ -16,6 +16,7 @@ def test01_create(clean):
     assert e.value == 123
     assert t.query_shared_1(e) == 123
     assert t.query_shared_2(e) == 123
+    assert t.query_shared_3(e) == 123
     del e
     collect()
     assert t.stats() == (1, 1)
@@ -46,8 +47,10 @@ def test02_sharedptr_from_python(clean):
 def test03_sharedptr_from_cpp(clean):
     e = t.Example.make(5)
     assert t.passthrough(e) is e
+    assert t.passthrough_2(e) is e
     assert t.query_shared_1(e) == 5
     assert t.query_shared_2(e) == 5
+    assert t.query_shared_3(e) == 5
 
     w = t.SharedWrapper(e)
     assert e is not w.value
@@ -59,7 +62,9 @@ def test03_sharedptr_from_cpp(clean):
     e = t.Example.make_shared(6)
     assert t.query_shared_1(e) == 6
     assert t.query_shared_2(e) == 6
+    assert t.query_shared_3(e) == 6
     assert t.passthrough(e) is e
+    assert t.passthrough_2(e) is e
 
     w = t.SharedWrapper(e)
     assert e is not w.value
@@ -80,17 +85,17 @@ def test04_uniqueptr_from_cpp(clean):
     assert t.stats() == (2, 2)
 
 
-def test05_uniqueptr_from_cpp(clean):
+def test05a_uniqueptr_from_cpp(clean):
     # Test ownership exchange when the object has been created on the C++ side
     a = t.unique_from_cpp()
     b = t.unique_from_cpp_2()
     wa = t.UniqueWrapper(a)
     wb = t.UniqueWrapper(b)
-    with pytest.warns(RuntimeWarning, match='nanobind: attempted to access an uninitialized instance of type \'test_holders_ext.Example\'!'):
+    with pytest.warns(RuntimeWarning, match='nanobind: attempted to access a relinquished instance of type \'test_holders_ext.Example\'!'):
         with pytest.raises(TypeError) as excinfo:
             assert a.value == 1
         assert 'incompatible function arguments' in str(excinfo.value)
-    with pytest.warns(RuntimeWarning, match='nanobind: attempted to access an uninitialized instance of type \'test_holders_ext.Example\'!'):
+    with pytest.warns(RuntimeWarning, match='nanobind: attempted to access a relinquished instance of type \'test_holders_ext.Example\'!'):
         with pytest.raises(TypeError) as excinfo:
             assert b.value == 2
         assert 'incompatible function arguments' in str(excinfo.value)
@@ -116,6 +121,52 @@ def test05_uniqueptr_from_cpp(clean):
     collect()
     assert t.stats() == (2, 2)
 
+def test05b_uniqueptr_list(clean):
+    t.reset()
+    # Test ownership exchange as part of a larger data structure
+    k = t.unique_from_cpp(1)
+    v = t.unique_from_cpp(2)
+    res = t.passthrough_unique_pairs([(k, v)])
+    assert res == [(k, v)]
+    assert k.value == 1 and v.value == 2
+
+    res = t.passthrough_unique_pairs([(k, v)], clear=True)
+    assert res == []
+    for obj in (k, v):
+        with pytest.warns(RuntimeWarning, match='nanobind: attempted to access a relinquished instance of type \'test_holders_ext.Example\'!'):
+            with pytest.raises(TypeError) as excinfo:
+                obj.value
+    collect()
+    assert t.stats() == (2, 2)
+
+def test05c_uniqueptr_structure_duplicate(clean):
+    t.reset()
+    # Test ownership exchange that fails partway through
+    # (can't take ownership from k twice)
+    k = t.unique_from_cpp(3)
+    with pytest.warns(RuntimeWarning, match=r'nanobind::detail::nb_relinquish_ownership()'):
+        with pytest.raises(TypeError):
+            t.passthrough_unique_pairs([(k, k)])
+    # Ownership passes back to Python
+    assert k.value == 3
+
+    del k
+    collect()
+    assert t.stats() == (1, 1)
+
+def test05d_uniqueptr_reinit(clean):
+    x = t.unique_from_cpp()
+    assert x.value == 1
+    w = t.UniqueWrapper(x)
+    with pytest.warns(RuntimeWarning, match='nanobind: attempted to access a relinquished instance of type \'test_holders_ext.Example\'!'):
+        with pytest.raises(TypeError):
+            x.value
+    with pytest.warns(RuntimeWarning, match='nanobind: attempted to access a relinquished instance of type \'test_holders_ext.Example\'!'):
+        with pytest.raises(TypeError):
+            x.__init__(3)
+    y = w.get()
+    assert y is x and y.value == 1
+
 
 def test06_uniqueptr_from_py(clean):
     # Test ownership exchange when the object has been created on the Python side
@@ -124,7 +175,7 @@ def test06_uniqueptr_from_py(clean):
         with pytest.raises(TypeError) as excinfo:
             wa = t.UniqueWrapper(a)
     wa = t.UniqueWrapper2(a)
-    with pytest.warns(RuntimeWarning, match='nanobind: attempted to access an uninitialized instance of type \'test_holders_ext.Example\'!'):
+    with pytest.warns(RuntimeWarning, match='nanobind: attempted to access a relinquished instance of type \'test_holders_ext.Example\'!'):
         with pytest.raises(TypeError) as excinfo:
             assert a.value == 1
         assert 'incompatible function arguments' in str(excinfo.value)
@@ -134,8 +185,30 @@ def test06_uniqueptr_from_py(clean):
     collect()
     assert t.stats() == (1, 1)
 
+    # Test that ownership exchange as part of a larger data structure fails
+    # gracefully rather than crashing
+    k = t.Example(1)
+    v = t.Example(2)
+    with pytest.warns(RuntimeWarning, match=r'nanobind::detail::nb_relinquish_ownership()'):
+        with pytest.raises(TypeError) as excinfo:
+            t.passthrough_unique_pairs([(k, v)])
+    assert k.value == 1 and v.value == 2
+
+    # Test the case where the key relinquishes ownership successfully and
+    # then the value can't do
+    v = t.unique_from_cpp(3)
+    with pytest.warns(RuntimeWarning, match=r'nanobind::detail::nb_relinquish_ownership()'):
+        with pytest.raises(TypeError) as excinfo:
+            t.passthrough_unique_pairs([(k, v)])
+    assert k.value == 1 and v.value == 3
+
+    del k, v
+    collect()
+    assert t.stats() == (4, 4)
+
 
 def test07_uniqueptr_passthrough(clean):
+    assert t.passthrough_unique(None) is None
     assert t.passthrough_unique(t.unique_from_cpp()).value == 1
     assert t.passthrough_unique(t.unique_from_cpp_2()).value == 2
     assert t.passthrough_unique_2(t.unique_from_cpp()).value == 1
@@ -345,3 +418,18 @@ def test13_shared_from_this_create_derived_in_cpp(clean):
     del e, w
     collect()
     assert t.stats() == (1, 1)
+
+
+def test14_nullable_properties():
+    a = t.ExampleWrapper()
+    assert a.value is not None
+    assert a.value.value == 5
+    assert a.value_nullable is None
+    a.value = t.Example(123)
+    a.value_nullable = t.Example(456)
+    assert a.value.value == 123
+    assert a.value_nullable.value == 456
+    a.value_nullable = None
+    assert a.value_nullable is None
+    with pytest.raises(TypeError):
+        a.value = None

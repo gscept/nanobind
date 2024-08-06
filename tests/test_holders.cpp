@@ -6,6 +6,7 @@
 #include <nanobind/stl/shared_ptr.h>
 #include <nanobind/stl/unique_ptr.h>
 #include <nanobind/stl/pair.h>
+#include <nanobind/stl/vector.h>
 
 namespace nb = nanobind;
 
@@ -83,8 +84,12 @@ NB_MODULE(test_holders_ext, m) {
     m.def("query_shared_1", [](Example *shared) { return shared->value; });
     m.def("query_shared_2",
           [](std::shared_ptr<Example> &shared) { return shared->value; });
+    m.def("query_shared_3",
+          [](std::shared_ptr<const Example> &shared) { return shared->value; });
     m.def("passthrough",
           [](std::shared_ptr<Example> shared) { return shared; });
+    m.def("passthrough_2",
+          [](std::shared_ptr<const Example> shared) { return shared; });
 
     // ------- enable_shared_from_this -------
 
@@ -149,7 +154,8 @@ NB_MODULE(test_holders_ext, m) {
     // ------- unique_ptr -------
 
     m.def("unique_from_cpp",
-          []() { return std::make_unique<Example>(1); });
+          [](int val) { return std::make_unique<Example>(val); },
+          nb::arg() = 1);
     m.def("unique_from_cpp_2", []() {
         return std::unique_ptr<Example, nb::deleter<Example>>(new Example(2));
     });
@@ -163,9 +169,19 @@ NB_MODULE(test_holders_ext, m) {
         .def("get", [](UniqueWrapper2 *uw) { return std::move(uw->value); });
 
     m.def("passthrough_unique",
-          [](std::unique_ptr<Example> unique) { return unique; });
+          [](std::unique_ptr<Example> unique) { return unique; },
+          nb::arg().none());
     m.def("passthrough_unique_2",
           [](std::unique_ptr<Example, nb::deleter<Example>> unique) { return unique; });
+
+    m.def("passthrough_unique_pairs",
+          [](std::vector<std::pair<std::unique_ptr<Example>,
+                                   std::unique_ptr<Example>>> v,
+             bool clear) {
+              if (clear)
+                  v.clear();
+              return v;
+          }, nb::arg("v"), nb::arg("clear") = false);
 
     m.def("stats", []{ return std::make_pair(created, deleted); });
     m.def("reset", []{ created = deleted = 0; });
@@ -232,4 +248,14 @@ NB_MODULE(test_holders_ext, m) {
                 throw std::runtime_error("Internal error");
         }
     });
+
+    struct ExampleWrapper {
+        Example value{5};
+        std::shared_ptr<Example> value_nullable;
+    };
+
+    nb::class_<ExampleWrapper>(m, "ExampleWrapper")
+        .def(nb::init<>())
+        .def_rw("value", &ExampleWrapper::value)
+        .def_rw("value_nullable", &ExampleWrapper::value_nullable, nb::arg().none());
 }

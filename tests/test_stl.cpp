@@ -12,6 +12,8 @@
 #include <nanobind/stl/unordered_set.h>
 #include <nanobind/stl/set.h>
 #include <nanobind/stl/filesystem.h>
+#include <nanobind/stl/complex.h>
+#include <nanobind/stl/wstring.h>
 
 NB_MAKE_OPAQUE(std::vector<float, std::allocator<float>>)
 
@@ -41,6 +43,14 @@ struct Copyable {
     Copyable(const Copyable &s) : value(s.value) { copy_constructed++; }
     Copyable &operator=(const Copyable &s) { value = s.value; copy_assigned++; return *this; }
     ~Copyable() { destructed++; }
+};
+
+struct NonAssignable {
+  int value = 5;
+
+  NonAssignable() = default;
+  NonAssignable(const NonAssignable &x) : value(x.value) { }
+  NonAssignable &operator=(const NonAssignable &) = delete;
 };
 
 struct StructWithReadonlyMap {
@@ -101,6 +111,10 @@ NB_MODULE(test_stl_ext, m) {
         .def(nb::init<int>())
         .def_rw("value", &Copyable::value);
 
+    nb::class_<NonAssignable>(m, "NonAssignable")
+        .def(nb::init<>())
+        .def_rw("value", &NonAssignable::value);
+
     nb::class_<StructWithReadonlyMap>(m, "StructWithReadonlyMap")
         .def(nb::init<>())
         .def_ro("map", &StructWithReadonlyMap::map);
@@ -160,7 +174,7 @@ NB_MODULE(test_stl_ext, m) {
         return x;
     });
 
-    m.def("vec_moveable_in_value", [](std::vector<Movable> x) {
+    m.def("vec_movable_in_value", [](std::vector<Movable> x) {
         if (x.size() != 10)
             fail();
         for (int i = 0; i< 10; ++i)
@@ -178,7 +192,7 @@ NB_MODULE(test_stl_ext, m) {
     });
 
 
-    m.def("vec_moveable_in_lvalue_ref", [](std::vector<Movable> &x) {
+    m.def("vec_movable_in_lvalue_ref", [](std::vector<Movable> &x) {
         if (x.size() != 10)
             fail();
         for (int i = 0; i< 10; ++i)
@@ -187,7 +201,7 @@ NB_MODULE(test_stl_ext, m) {
     });
 
 
-    m.def("vec_moveable_in_rvalue_ref", [](std::vector<Movable> &&x) {
+    m.def("vec_movable_in_rvalue_ref", [](std::vector<Movable> &&x) {
         if (x.size() != 10)
             fail();
         for (int i = 0; i< 10; ++i)
@@ -195,7 +209,7 @@ NB_MODULE(test_stl_ext, m) {
                 fail();
     });
 
-    m.def("vec_moveable_in_ptr_2", [](std::vector<Movable *> x) {
+    m.def("vec_movable_in_ptr_2", [](std::vector<Movable *> x) {
         if (x.size() != 10)
             fail();
         for (int i = 0; i< 10; ++i)
@@ -238,7 +252,7 @@ NB_MODULE(test_stl_ext, m) {
     nb::class_<FuncWrapper>(m, "FuncWrapper", nb::type_slots(slots))
         .def(nb::init<>())
         .def_rw("f", &FuncWrapper::f)
-        .def_ro_static("alive", &FuncWrapper::alive);
+        .def_ro_static("alive", &FuncWrapper::alive, "static read-only property");
 
     // ----- test35 ------
     m.def("identity_string", [](std::string& x) { return x; });
@@ -252,10 +266,12 @@ NB_MODULE(test_stl_ext, m) {
     m.def("optional_ret_opt_movable_ptr", []() { return new std::optional<Movable *>(new Movable()); });
     m.def("optional_ret_opt_none", []() { return std::optional<Movable>(); });
     m.def("optional_unbound_type", [](std::optional<int> &x) { return x; }, nb::arg("x") = nb::none());
+    m.def("optional_unbound_type_with_nullopt_as_default", [](std::optional<int> &x) { return x; }, nb::arg("x") = std::nullopt);
+    m.def("optional_non_assignable", [](std::optional<NonAssignable> &x) { return x; });
 
     // ----- test43-test50 ------
     m.def("variant_copyable", [](std::variant<Copyable, int> &) {});
-    m.def("variant_copyable_none", [](std::variant<std::monostate, Copyable, int> &) {}, nb::arg("x").none());
+    m.def("variant_copyable_none", [](std::variant<std::monostate, int, Copyable> &) {}, nb::arg("x").none());
     m.def("variant_copyable_ptr", [](std::variant<Copyable *, int> &) {});
     m.def("variant_copyable_ptr_none", [](std::variant<Copyable *, int> &) {}, nb::arg("x").none());
     m.def("variant_ret_var_copyable", []() { return std::variant<Copyable, int>(); });
@@ -422,4 +438,34 @@ NB_MODULE(test_stl_ext, m) {
         vec.flip();
         return vec;
     });
+
+
+    m.def("complex_value_float", [](const std::complex<float>& x){
+        return x;
+    });
+    m.def("complex_value_double", [](const std::complex<double>& x){
+        return x;
+    });
+
+    m.def("complex_array_float", [](const std::vector<std::complex<float>>& x){
+        return x;
+    });
+    m.def("complex_array_double", [](const std::vector<std::complex<double>>& x){
+        return x;
+    });
+
+    m.def("vector_str", [](const std::vector<std::string>& x){
+        return x;
+    });
+    m.def("vector_str", [](std::string& x){
+        return x;
+    });
+
+    m.def("pass_wstr", [](std::wstring ws) { return ws; });
+
+    // uncomment to see compiler error:
+    // m.def("optional_intptr", [](std::optional<int*>) {});
+    m.def("optional_cstr", [](std::optional<const char*> arg) {
+        return arg.value_or("none");
+    }, nb::arg().none());
 }
